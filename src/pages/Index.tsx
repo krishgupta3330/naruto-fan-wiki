@@ -4,9 +4,19 @@ declare global {
   interface Window {
     Hands: any;
     Camera: any;
+    FaceMesh: any;
     drawConnectors: any;
     drawLandmarks: any;
     HAND_CONNECTIONS: any;
+    FACEMESH_TESSELATION: any;
+    FACEMESH_RIGHT_EYE: any;
+    FACEMESH_LEFT_EYE: any;
+    FACEMESH_RIGHT_EYEBROW: any;
+    FACEMESH_LEFT_EYEBROW: any;
+    FACEMESH_FACE_OVAL: any;
+    FACEMESH_LIPS: any;
+    FACEMESH_RIGHT_IRIS: any;
+    FACEMESH_LEFT_IRIS: any;
   }
 }
 
@@ -25,6 +35,7 @@ const Index = () => {
 
     let pwr = [0, 0];
     let wasOpen = [false, false];
+    let latestFaceResults: any = null;
 
     function checkOpen(pts: any[]) {
       let count = 0;
@@ -43,11 +54,70 @@ const Index = () => {
       return count >= 3;
     }
 
-    function onResults(res: any) {
+    function drawFace(ctx: CanvasRenderingContext2D) {
+      if (!latestFaceResults?.multiFaceLandmarks) return;
+      for (const landmarks of latestFaceResults.multiFaceLandmarks) {
+        // Tesselation (face mesh grid)
+        window.drawConnectors(ctx, landmarks, window.FACEMESH_TESSELATION, {
+          color: "#00d4ff10",
+          lineWidth: 0.5,
+        });
+        // Face oval
+        window.drawConnectors(ctx, landmarks, window.FACEMESH_FACE_OVAL, {
+          color: "#00d4ff",
+          lineWidth: 1.5,
+        });
+        // Eyes
+        window.drawConnectors(ctx, landmarks, window.FACEMESH_RIGHT_EYE, {
+          color: "#ff4444",
+          lineWidth: 1.5,
+        });
+        window.drawConnectors(ctx, landmarks, window.FACEMESH_LEFT_EYE, {
+          color: "#ff4444",
+          lineWidth: 1.5,
+        });
+        // Eyebrows
+        window.drawConnectors(ctx, landmarks, window.FACEMESH_RIGHT_EYEBROW, {
+          color: "#00fbff",
+          lineWidth: 1,
+        });
+        window.drawConnectors(ctx, landmarks, window.FACEMESH_LEFT_EYEBROW, {
+          color: "#00fbff",
+          lineWidth: 1,
+        });
+        // Lips
+        window.drawConnectors(ctx, landmarks, window.FACEMESH_LIPS, {
+          color: "#ff6600",
+          lineWidth: 1.5,
+        });
+        // Irises
+        if (window.FACEMESH_RIGHT_IRIS) {
+          window.drawConnectors(ctx, landmarks, window.FACEMESH_RIGHT_IRIS, {
+            color: "#ff0000",
+            lineWidth: 1,
+          });
+        }
+        if (window.FACEMESH_LEFT_IRIS) {
+          window.drawConnectors(ctx, landmarks, window.FACEMESH_LEFT_IRIS, {
+            color: "#ff0000",
+            lineWidth: 1,
+          });
+        }
+      }
+    }
+
+    function onHandResults(res: any) {
       cElement.width = vElement.videoWidth;
       cElement.height = vElement.videoHeight;
       ctx.save();
       ctx.clearRect(0, 0, cElement.width, cElement.height);
+
+      // Draw face mesh first (behind hands)
+      ctx.save();
+      ctx.shadowBlur = 6;
+      ctx.shadowColor = "#00fbff";
+      drawFace(ctx);
+      ctx.restore();
 
       let fL = false;
       let fR = false;
@@ -132,23 +202,41 @@ const Index = () => {
       ctx.restore();
     }
 
+    // --- Hand tracking ---
     const h = new window.Hands({
       locateFile: (f: string) =>
         `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}`,
     });
-
     h.setOptions({
       maxNumHands: 2,
       modelComplexity: 1,
       minDetectionConfidence: 0.65,
       minTrackingConfidence: 0.65,
     });
+    h.onResults(onHandResults);
 
-    h.onResults(onResults);
+    // --- Face mesh ---
+    const fm = new window.FaceMesh({
+      locateFile: (f: string) =>
+        `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${f}`,
+    });
+    fm.setOptions({
+      maxNumFaces: 1,
+      refineLandmarks: true,
+      minDetectionConfidence: 0.5,
+      minTrackingConfidence: 0.5,
+    });
+    fm.onResults((results: any) => {
+      latestFaceResults = results;
+    });
 
+    // --- Camera: send frames to both models ---
     const cam = new window.Camera(vElement, {
       onFrame: async () => {
-        await h.send({ image: vElement });
+        await Promise.all([
+          h.send({ image: vElement }),
+          fm.send({ image: vElement }),
+        ]);
       },
       width: 1280,
       height: 720,
