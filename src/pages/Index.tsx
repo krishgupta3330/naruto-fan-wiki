@@ -19,6 +19,10 @@ declare global {
   }
 }
 
+function lerp(a: number, b: number, t: number) {
+  return a + (b - a) * t;
+}
+
 const Index = () => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -34,12 +38,26 @@ const Index = () => {
 
     let pwr = [0, 0];
     let wasOpen = [false, false];
+    // Smoothed positions for overlays
+    let smoothPos = [
+      { x: 0, y: 0 },
+      { x: 0, y: 0 },
+    ];
+    const SMOOTH = 0.25; // position lerp factor (higher = snappier)
 
     function checkOpen(pts: any[]) {
       let count = 0;
       const wrist = pts[0];
       const tips = [8, 12, 16, 20];
       const pips = [6, 10, 14, 18];
+      // Also check thumb
+      const thumbTip = pts[4];
+      const thumbIp = pts[3];
+      if (
+        Math.hypot(thumbTip.x - wrist.x, thumbTip.y - wrist.y) >
+        Math.hypot(thumbIp.x - wrist.x, thumbIp.y - wrist.y)
+      )
+        count++;
       for (let i = 0; i < tips.length; i++) {
         const tip = pts[tips[i]];
         const pip = pts[pips[i]];
@@ -49,14 +67,13 @@ const Index = () => {
         )
           count++;
       }
-      return count >= 3;
+      return count >= 4;
     }
 
     function drawFace(landmarks: any[]) {
       ctx.save();
       ctx.shadowBlur = 6;
       ctx.shadowColor = "#00fbff";
-
       window.drawConnectors(ctx, landmarks, window.FACEMESH_TESSELATION, {
         color: "#00d4ff10",
         lineWidth: 0.5,
@@ -85,26 +102,20 @@ const Index = () => {
         color: "#ff6600",
         lineWidth: 1.5,
       });
-      if (window.FACEMESH_RIGHT_IRIS) {
+      if (window.FACEMESH_RIGHT_IRIS)
         window.drawConnectors(ctx, landmarks, window.FACEMESH_RIGHT_IRIS, {
           color: "#ff0000",
           lineWidth: 1,
         });
-      }
-      if (window.FACEMESH_LEFT_IRIS) {
+      if (window.FACEMESH_LEFT_IRIS)
         window.drawConnectors(ctx, landmarks, window.FACEMESH_LEFT_IRIS, {
           color: "#ff0000",
           lineWidth: 1,
         });
-      }
       ctx.restore();
     }
 
-    function processHand(
-      pts: any[],
-      isR: boolean,
-      idx: number
-    ) {
+    function processHand(pts: any[], isR: boolean, idx: number) {
       ctx.save();
       ctx.shadowBlur = 10;
       ctx.shadowColor = "#00fbff";
@@ -120,7 +131,8 @@ const Index = () => {
       ctx.restore();
 
       const open = checkOpen(pts);
-      pwr[idx] += open ? 0.05 : -0.15;
+      // Smoother power ramp
+      pwr[idx] += open ? 0.08 : -0.06;
       pwr[idx] = Math.max(0, Math.min(1, pwr[idx]));
 
       if (open && !wasOpen[idx]) {
@@ -137,8 +149,12 @@ const Index = () => {
         if (isR) {
           const tx = (wrist.x + knk.x) / 2;
           const ty = (wrist.y + knk.y) / 2;
-          s.style.left = `${(1 - tx) * window.innerWidth}px`;
-          s.style.top = `${ty * window.innerHeight}px`;
+          const rawX = (1 - tx) * window.innerWidth;
+          const rawY = ty * window.innerHeight;
+          smoothPos[idx].x = lerp(smoothPos[idx].x, rawX, SMOOTH);
+          smoothPos[idx].y = lerp(smoothPos[idx].y, rawY, SMOOTH);
+          s.style.left = `${smoothPos[idx].x}px`;
+          s.style.top = `${smoothPos[idx].y}px`;
           s.style.display = "block";
           s.style.opacity = String(pwr[idx]);
           return "R";
@@ -147,8 +163,12 @@ const Index = () => {
           const dy = knk.y - wrist.y;
           const tx = knk.x + dx * 0.8;
           const ty = knk.y + dy * 0.8;
-          n.style.left = `${(1 - tx) * window.innerWidth}px`;
-          n.style.top = `${ty * window.innerHeight - 120}px`;
+          const rawX = (1 - tx) * window.innerWidth;
+          const rawY = ty * window.innerHeight - 120;
+          smoothPos[idx].x = lerp(smoothPos[idx].x, rawX, SMOOTH);
+          smoothPos[idx].y = lerp(smoothPos[idx].y, rawY, SMOOTH);
+          n.style.left = `${smoothPos[idx].x}px`;
+          n.style.top = `${smoothPos[idx].y}px`;
           n.style.display = "block";
           n.style.opacity = String(pwr[idx]);
           return "L";
@@ -163,18 +183,13 @@ const Index = () => {
       ctx.save();
       ctx.clearRect(0, 0, cElement.width, cElement.height);
 
-      // Draw face
-      if (res.faceLandmarks) {
-        drawFace(res.faceLandmarks);
-      }
+      if (res.faceLandmarks) drawFace(res.faceLandmarks);
 
       let fL = false;
       let fR = false;
       n.style.display = "none";
       s.style.display = "none";
 
-      // Holistic gives leftHandLandmarks and rightHandLandmarks
-      // Note: holistic labels are from the person's perspective
       if (res.rightHandLandmarks) {
         const side = processHand(res.rightHandLandmarks, false, 0);
         if (side === "L") fL = true;
@@ -185,7 +200,7 @@ const Index = () => {
       }
 
       if (!fL) {
-        pwr[0] = Math.max(0, pwr[0] - 0.15);
+        pwr[0] = Math.max(0, pwr[0] - 0.06);
         if (pwr[0] > 0.01) {
           n.style.display = "block";
           n.style.opacity = String(pwr[0]);
@@ -193,7 +208,7 @@ const Index = () => {
         wasOpen[0] = false;
       }
       if (!fR) {
-        pwr[1] = Math.max(0, pwr[1] - 0.15);
+        pwr[1] = Math.max(0, pwr[1] - 0.06);
         if (pwr[1] > 0.01) {
           s.style.display = "block";
           s.style.opacity = String(pwr[1]);
@@ -209,13 +224,13 @@ const Index = () => {
     });
 
     holistic.setOptions({
-      modelComplexity: 1,
+      modelComplexity: 2,
       smoothLandmarks: true,
       enableSegmentation: false,
       smoothSegmentation: false,
       refineFaceLandmarks: true,
-      minDetectionConfidence: 0.5,
-      minTrackingConfidence: 0.5,
+      minDetectionConfidence: 0.7,
+      minTrackingConfidence: 0.7,
     });
 
     holistic.onResults(onResults);
@@ -273,6 +288,7 @@ const Index = () => {
           display: "none",
           mixBlendMode: "screen",
           zIndex: 20,
+          willChange: "transform, opacity, left, top",
         }}
       />
       <video
@@ -292,6 +308,7 @@ const Index = () => {
           display: "none",
           mixBlendMode: "screen",
           zIndex: 20,
+          willChange: "transform, opacity, left, top",
         }}
       />
     </div>
